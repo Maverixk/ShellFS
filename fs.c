@@ -60,7 +60,10 @@ void format(const char *fs_filename, int size){
 // Opens <fs_filename>
 void open_fs(const char *fs_filename){
     fs_fd = open(fs_filename, O_RDWR, 0600);
-    assert(fs_fd > 0 && "open failed");
+    if(fs_fd < 0){
+        printf("open: file system does not exist\n");
+        return;
+    }
 
     struct stat st;
     assert(fstat(fs_fd, &st) == 0 && "fstat failed");
@@ -84,6 +87,7 @@ void open_fs(const char *fs_filename){
 
 }
 
+// Closes currently open FS
 void close_fs(){
     assert(!munmap(fs_data, fs_size) && "munmap failed");
     assert(!close(fs_fd) && "file close failed");
@@ -95,84 +99,153 @@ void close_fs(){
     current_dir = NULL;
 }
 
-void _mkdir(const char *name){
-    // Check that dir name isn't longer than FILENAME_LEN bytes
-    if (strlen(name) >= FILENAME_LEN){
-        printf("mkdir: name too long\n");
+// Creates a directory (can do that given both a path or a simple dir name)
+void _mkdir(const char *path){
+    // Assuming we have a path, we don't want it deeper than 6 levels (6 dir to navigate with cd + dir to create, plus associated /)
+    if (path == NULL || strlen(path) == 0 || strlen(path) >= 230){
+        printf("mkdir: invalid path\n");
         return;
     }
+    
+    // Easy case, command looks like this "mkdir dir2"
+    if(strchr(path, '/') == NULL){
+        // Check that dir name isn't longer than FILENAME_LEN bytes
+        if (strlen(path) >= FILENAME_LEN){
+            printf("mkdir: name too long\n");
+            return;
+        }
 
-    // Can't create dir with no name or .(current), ..(parent) name, I'll cry
-    if (name == NULL || strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
-        printf("mkdir: invalid directory name\n");
-        return;
+        // Can't create dir with no name or .(current), ..(parent) name, I'll cry
+        if (path == NULL || strcmp(path, ".") == 0 || strcmp(path, "..") == 0) {
+            printf("mkdir: invalid directory name\n");
+            return;
+        }
+
+        // Check if name has already been used
+        int temp_cluster = current_cluster;
+        while (temp_cluster != FAT_EOC){
+            void *cluster_data = data + CLUSTER_SIZE * (temp_cluster - fs->data_start);
+            FSEntry *entries = (FSEntry *)(cluster_data + sizeof(int));
+            int cluster_entry_count = *(int *)(cluster_data);
+            for (int i = 0; i < cluster_entry_count; i++){
+                if (strcmp(entries[i].name, path) == 0){
+                    printf("mkdir: directory '%s' is already existing\n", path);
+                    return;
+                }
+            }
+            temp_cluster = fat[temp_cluster];
+        }
+
+        // Find a free cluster on FAT
+        int new_cluster = -1;
+        for (int i = fs->data_start; i < fs->total_cluster; i++){
+            if (fat[i] == 0){
+                new_cluster = i;
+                break;
+            }
+        }
+
+        if (new_cluster == -1){
+            printf("mkdir: no empty space\n");
+            return;
+        }
+
+        fat[new_cluster] = FAT_EOC;
+
+        // Add entry to current directory
+        FSEntry entry;
+        strncpy(entry.name, path, FILENAME_LEN);
+        entry.name[FILENAME_LEN - 1] = '\0';
+        entry.is_dir = 1;
+        entry.start_cluster = new_cluster;
+        entry.size = 0;
+
+        if (!insert_entry_in_directory(entry)){
+            printf("mkdir: not enough space to insert entry\n");
+            return;
+        }
+
+        // Initialize new cluster entry count to 2
+        FSEntry *new_dir_entries = (FSEntry *)(data + CLUSTER_SIZE * (new_cluster - fs->data_start) + sizeof(int));
+        *(int *)(data + CLUSTER_SIZE * (new_cluster - fs->data_start)) = 2;
+
+        // To make cd command code easier I want to map self and parent dir in the new dir entries array
+        strcpy(new_dir_entries[0].name, ".");
+        new_dir_entries[0].is_dir = 1;
+        new_dir_entries[0].start_cluster = new_cluster;
+
+        strcpy(new_dir_entries[1].name, "..");
+        new_dir_entries[1].is_dir = 1;
+        new_dir_entries[1].start_cluster = current_cluster;
     }
+    // In case we have a proper path "mkdir ../dir2/dir3" we want to follow it and create a dir with the last name in the path
+    else{
+        char path_copy[256];
+        strcpy(path_copy, path);
+        path_copy[sizeof(path_copy) - 1] = '\0';
 
-    // Check if name has already been used
-    int temp_cluster = current_cluster;
-    while (temp_cluster != FAT_EOC){
-        void *cluster_data = data + CLUSTER_SIZE * (temp_cluster - fs->data_start);
-        FSEntry *entries = (FSEntry *)(cluster_data + sizeof(int));
-        int cluster_entry_count = *(int *)(cluster_data);
-        for (int i = 0; i < cluster_entry_count; i++){
-            if (strcmp(entries[i].name, name) == 0){
-                printf("mkdir: directory '%s' is already existing\n", name);
+        char *components[MAX_PATH_COMPONENTS];
+        int count = 0;
+
+        // We store all the various dir name individually as we want to run them through the cd function
+        char *token = strtok(path_copy, "/");
+        while (token){
+            if(strlen(token) >= FILENAME_LEN){
+                printf("mkdir: name too long\n");
+                return;
+            }
+            components[count++] = token;
+            token = strtok(NULL, "/");
+        }
+
+        // If 0 dir names were read there is clearly something wrong
+        if (count == 0){
+            if (strcmp(path, "/") == 0)
+                printf("mkdir: cannot create root directory\n");
+            else 
+                printf("mkdir: invalid path\n");
+            return;
+        }
+
+        //
+        if(count > MAX_PATH_COMPONENTS){
+            printf("mkdir: path is too deep\n");
+            return;
+        }
+
+        // Save current cluster
+        int original_cluster = current_cluster;
+        FSEntry *original_dir = current_dir;
+        int original_entry_count = current_entry_count;
+
+        // Navigate the path until the second last dir name
+        for (int i = 0; i < count - 1; i++){
+            if(_cd(components[i]) == -1){
+                current_cluster = original_cluster;
+                current_dir = original_dir;
+                current_entry_count = original_entry_count;
+                printf("mkdir: invalid path\n");
                 return;
             }
         }
-        temp_cluster = fat[temp_cluster];
+
+        // Recursive call on final dir name
+        _mkdir(components[count - 1]);
+
+        // Recover cluster status (if things went sideways in the cd we are still safe cluster wise)
+        current_cluster = original_cluster;
+        current_dir = original_dir;
+        current_entry_count = original_entry_count;
     }
-
-    // Find a free cluster on FAT
-    int new_cluster = -1;
-    for (int i = fs->data_start; i < fs->total_cluster; i++){
-        if (fat[i] == 0){
-            new_cluster = i;
-            break;
-        }
-    }
-
-    if (new_cluster == -1){
-        printf("mkdir: no empty space\n");
-        return;
-    }
-
-    fat[new_cluster] = FAT_EOC;
-
-    // Add entry to current directory
-    FSEntry entry;
-    strncpy(entry.name, name, FILENAME_LEN);
-    entry.name[FILENAME_LEN - 1] = '\0';
-    entry.is_dir = 1;
-    entry.start_cluster = new_cluster;
-    entry.size = 0;
-
-    if (!insert_entry_in_directory(entry)){
-        printf("mkdir: not enough space to insert entry\n");
-        return;
-    }
-
-    // Initialize new cluster entry count to 2
-    FSEntry *new_dir_entries = (FSEntry *)(data + CLUSTER_SIZE * (new_cluster - fs->data_start) + sizeof(int));
-    *(int *)(data + CLUSTER_SIZE * (new_cluster - fs->data_start)) = 2;
-
-    // To make cd command code easier I want to map self and parent dir in the new dir entries array
-    strcpy(new_dir_entries[0].name, ".");
-    new_dir_entries[0].is_dir = 1;
-    new_dir_entries[0].start_cluster = new_cluster;
-
-    strcpy(new_dir_entries[1].name, "..");
-    new_dir_entries[1].is_dir = 1;
-    new_dir_entries[1].start_cluster = current_cluster;
 }
 
-void _cd(const char *path){
+int _cd(const char *path){
     // I have to consider the possibility that user may want to go back to root directory
     if (strcmp(path, "/") == 0){
         current_cluster = fs->root_cluster;
         current_dir = (FSEntry *)(data + CLUSTER_SIZE * (current_cluster - fs->data_start) + sizeof(int));
         current_entry_count = *(int *)(data + CLUSTER_SIZE * (current_cluster - fs->data_start));
-        return;
+        return 0;
     }
 
     int cluster = current_cluster;
@@ -204,7 +277,7 @@ void _cd(const char *path){
 
             if (!found){
                 printf("cd: no parent directory\n");
-                return;
+                return -1;
             }
         }
         else{
@@ -231,7 +304,7 @@ void _cd(const char *path){
 
             if (!found){
                 printf("cd: directory '%s' not found\n", token);
-                return;
+                return -1;
             }
         }
         token = strtok(NULL, "/");
@@ -241,6 +314,7 @@ void _cd(const char *path){
     current_cluster = cluster;
     current_dir = (FSEntry *)(data + CLUSTER_SIZE * (cluster - fs->data_start) + sizeof(int));
     current_entry_count = *(int *)(data + CLUSTER_SIZE * (cluster - fs->data_start));
+    return 0;
 }
 
 int allocate_new_cluster(int last_cluster){

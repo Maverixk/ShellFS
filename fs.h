@@ -6,6 +6,7 @@
 #define MAX_BLOCKS 10000
 #define FAT_EOC -1
 #define MAX_ENTRIES (CLUSTER_SIZE - sizeof(int)) / sizeof(FSEntry)
+#define MAX_PATH_COMPONENTS 7
 
 
 // Data structures
@@ -28,7 +29,7 @@ void format(const char* fs_filename, int size);
 void open_fs(const char* fs_filename);
 void close_fs();
 void _mkdir(const char* name);
-void _cd(const char* path);
+int _cd(const char* path);
 int insert_entry_in_directory(FSEntry entry);
 int allocate_new_cluster(int last_cluster);
 
