@@ -116,7 +116,7 @@ void _mkdir(const char *path){
         }
 
         // Can't create dir with no name or .(current), ..(parent) name, I'll cry
-        if (path == NULL || strcmp(path, ".") == 0 || strcmp(path, "..") == 0) {
+        if (strcmp(path, ".") == 0 || strcmp(path, "..") == 0) {
             printf("mkdir: invalid directory name\n");
             return;
         }
@@ -140,6 +140,7 @@ void _mkdir(const char *path){
         int new_cluster = -1;
         for (int i = fs->data_start; i < fs->total_cluster; i++){
             if (fat[i] == 0){
+                fat[i] = FAT_EOC;
                 new_cluster = i;
                 break;
             }
@@ -150,8 +151,6 @@ void _mkdir(const char *path){
             return;
         }
 
-        fat[new_cluster] = FAT_EOC;
-
         // Add entry to current directory
         FSEntry entry;
         strncpy(entry.name, path, FILENAME_LEN);
@@ -160,7 +159,7 @@ void _mkdir(const char *path){
         entry.start_cluster = new_cluster;
         entry.size = 0;
 
-        if (!insert_entry_in_directory(entry)){
+        if (insert_entry_in_directory(entry)){
             printf("mkdir: not enough space to insert entry\n");
             return;
         }
@@ -180,7 +179,7 @@ void _mkdir(const char *path){
     }
     // In case we have a proper path "mkdir ../dir2/dir3" we want to follow it and create a dir with the last name in the path
     else{
-        char path_copy[256];
+        char path_copy[230];
         strcpy(path_copy, path);
         path_copy[sizeof(path_copy) - 1] = '\0';
 
@@ -191,7 +190,7 @@ void _mkdir(const char *path){
         char *token = strtok(path_copy, "/");
         while (token){
             if(strlen(token) >= FILENAME_LEN){
-                printf("mkdir: name too long\n");
+                printf("mkdir: name '%s' too long\n", token);
                 return;
             }
             components[count++] = token;
@@ -317,6 +316,319 @@ int _cd(const char *path){
     return 0;
 }
 
+void _rm(const char* path){
+    if(path == NULL || strlen(path) == 0 || strlen(path) >= 230){
+        printf("rm: invalid path\n");
+        return;
+    }
+
+    // Easy case, path is just name (no /)
+    if(strchr(path, '/') == NULL){
+        int found = 0;
+        int cluster = current_cluster;
+
+        while(!found && cluster != FAT_EOC){
+            void* cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
+            FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
+            int entry_count = *(int*)cluster_ptr;
+
+            for(int i = 0; i < entry_count; i++){
+                if(strcmp(entries[i].name, path) == 0){
+                    found = 1;
+
+                    // If the entry is a directory and it's not empty we can't remove it (same as we can't create directories recursively)
+                    if(entries[i].is_dir){
+                        int dir_cluster = entries[i].start_cluster;
+                        int entry_count = *(int*)(data + CLUSTER_SIZE * (dir_cluster - fs->data_start));
+
+                        // There are other entries apart from . and ..
+                        if(entry_count > 2){
+                            printf("rm: directory not empty\n");
+                            return;
+                        }
+                    }
+
+                    free_cluster_chain(entries[i].start_cluster);
+
+                    if(remove_entry_from_directory(entries[i].name) == -1)
+                        printf("rm: error removing entry\n");
+
+                    return;
+                }
+            }
+            cluster = fat[cluster];
+        }
+
+        if(!found){
+            printf("rm: '%s' not found\n", path);
+            return;
+        }
+    }
+    // Again, the case we don't like, a path
+    else{
+        char path_copy[230];
+        strcpy(path_copy, path);
+
+        char* components[MAX_PATH_COMPONENTS];
+        int count = 0;
+
+        char* token = strtok(path_copy, "/");
+        while(token){
+            if(strlen(token) >= FILENAME_LEN){
+                printf("rm: name too long\n");
+                return;
+            }
+            components[count++] = token;
+            token = strtok(NULL, "/");
+        }
+
+        if(count == 0){
+            printf("rm: invalid path\n");
+            return;
+        }
+
+        if(count > 7){
+            printf("rm: path is too deep\n");
+            return;
+        }
+
+        // Save current status and prepare to fight
+        int original_cluster = current_cluster;
+        FSEntry* original_dir = current_dir;
+        int original_entry_count = current_entry_count;
+
+        // Going down the path to see if it actually exists
+        for(int i = 0; i < count - 1; i++){
+            if(_cd(components[i]) == -1){
+                current_cluster = original_cluster;
+                current_dir = original_dir;
+                current_entry_count = original_entry_count;
+                printf("rm: invalid path\n");
+                return;
+            }
+        }
+
+        // Calling rm recursively on the entry we want to remove
+        _rm(components[count - 1]);
+
+        // Recover cluster status
+        current_cluster = original_cluster;
+        current_dir = original_dir;
+        current_entry_count = original_entry_count;
+    }
+}
+
+void _ls(const char* path){
+    if(path == NULL || strlen(path) == 0 || strlen(path) >= 230){
+        printf("rm: invalid path\n");
+        return;
+    }
+
+    // Easy case, path is just name (no /)
+    if(strchr(path, '/') == NULL){
+        int found = 0;
+        for(int i = 0; i < current_entry_count; i++){
+            if(strcmp(path, current_dir[i].name) == 0){
+                found = 1;
+                if(current_dir[i].is_dir){
+                    int cluster = current_dir[i].start_cluster;
+                    void* cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
+                    FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
+                    int entry_count = *(int*)cluster_ptr;
+
+                    printf("ls: ");
+                    for(int i = 0; i < entry_count; i++){
+                        printf("%s", entries[i].name);
+                        if(i != entry_count - 1) printf(" | ");
+                        else printf("\n");
+                    }
+                }
+                else{
+                    printf("ls: '%s' not a directory\n", path);
+                    return;
+                }
+            }
+        }
+
+        if(!found){
+            printf("ls: '%s' not found\n", path);
+            return;
+        }
+    }
+    // Again, the case we don't like, a path
+    else{
+        char path_copy[230];
+        strcpy(path_copy, path);
+
+        char* components[MAX_PATH_COMPONENTS];
+        int count = 0;
+
+        char* token = strtok(path_copy, "/");
+        while(token){
+            if(strlen(token) >= FILENAME_LEN){
+                printf("ls: name too long\n");
+                return;
+            }
+            components[count++] = token;
+            token = strtok(NULL, "/");
+        }
+
+        if(count == 0){
+            printf("ls: invalid path\n");
+            return;
+        }
+
+        if(count > 7){
+            printf("ls: path is too deep\n");
+            return;
+        }
+
+        // Save current status and prepare to fight
+        int original_cluster = current_cluster;
+        FSEntry* original_dir = current_dir;
+        int original_entry_count = current_entry_count;
+
+        // Going down the path to see if it actually exists
+        for(int i = 0; i < count - 1; i++){
+            if(_cd(components[i]) == -1){
+                current_cluster = original_cluster;
+                current_dir = original_dir;
+                current_entry_count = original_entry_count;
+                printf("ls: invalid path\n");
+                return;
+            }
+        }
+
+        // Calling ls recursively on the entry we want to list
+        _ls(components[count - 1]);
+
+        // Recover cluster status
+        current_cluster = original_cluster;
+        current_dir = original_dir;
+        current_entry_count = original_entry_count;
+    }
+}
+
+void _touch(const char* path){
+    // Assuming we have a path, we don't want it deeper than 6 levels (6 dir to navigate with cd + dir to create, plus associated /)
+    if (path == NULL || strlen(path) == 0 || strlen(path) >= 230){
+        printf("touch: invalid path\n");
+        return;
+    }
+
+    // Likeable case, just the filename to create
+    if(strchr(path, '/') == NULL){
+        
+        // We want the filename to stay within FILENAME_LEN bytes
+        if(strlen(path) >= FILENAME_LEN){
+            printf("touch: name is too long\n");
+            return;
+        }
+
+        // Can't create dir with no name or .(current), ..(parent) name, I'll cry
+        if (strcmp(path, ".") == 0 || strcmp(path, "..") == 0) {
+            printf("touch: invalid file name\n");
+            return;
+        }
+
+        // Check if name has already been used in current directory
+        int temp_cluster = current_cluster;
+        while(temp_cluster != FAT_EOC){
+            void* cluster_data = data + CLUSTER_SIZE * (temp_cluster - fs->data_start);
+            int entry_count = *(int*)cluster_data;
+            FSEntry* entries = (FSEntry*)(cluster_data + sizeof(int));
+            for(int i = 0; i < entry_count; i++){
+                if(strcmp(entries[i].name, path) == 0){
+                    printf("touch: file '%s' is already existing\n", path);
+                    return;
+                }
+            }
+            temp_cluster = fat[temp_cluster];
+        }
+
+        // Find a free cluster on FAT
+        int new_cluster = -1;
+        for(int i = fs->data_start; i < fs->total_cluster; i++){
+            if(fat[i] == 0){
+                fat[i] = FAT_EOC;
+                new_cluster = i;
+                break;
+            }
+        }
+
+        if(new_cluster == -1){
+            printf("touch: no empty space\n");
+            return;
+        }
+
+        // Add file to current directory
+        FSEntry entry;
+        strncpy(entry.name, path, FILENAME_LEN);
+        entry.name[FILENAME_LEN - 1] = '\0';
+        entry.is_dir = 0;
+        entry.size = 0;
+        entry.start_cluster = new_cluster;
+
+        if(insert_entry_in_directory(entry) == -1){
+            printf("touch: not enough space to insert entry\n");
+            return;
+        }
+    }
+    // Unlikeable case, we gotta scan through multiple dirs
+    else{
+        char path_copy[230];
+        strcpy(path_copy, path);
+
+        char* components[MAX_PATH_COMPONENTS];
+        int count = 0;
+
+        char* token = strtok(path_copy, "/");
+        while(token){
+            if(strlen(token) >= FILENAME_LEN){
+                printf("touch: name '%s' too long\n", token);
+                return;
+            }
+            components[count++] = token;
+            token = strtok(NULL, "/");
+        }
+
+        if(count == 0){
+            printf("touch: invalid path\n");
+            return;
+        }
+
+        if(count > MAX_PATH_COMPONENTS){
+            printf("touch: path is too deep\n");
+            return;
+        }
+
+        // We save current cluster
+        int original_cluster = current_cluster;
+        FSEntry* original_dir = current_dir;
+        int original_entry_count = current_entry_count;
+
+        // We go down the path until the second name (the file name to create)
+        for(int i = 0; i < count - 1; i++){
+            if(_cd(components[i]) == -1){
+                current_cluster = original_cluster;
+                current_dir = original_dir;
+                current_entry_count = original_entry_count;
+                printf("touch: invalid path\n");
+                return;
+            }
+        }
+        
+        // Recursive call on file name
+        _touch(components[count - 1]);
+
+        // Restore original cluster
+        current_cluster = original_cluster;
+        current_dir = original_dir;
+        current_entry_count = original_entry_count;
+    }
+}
+
+// Starting from a certain cluster, allocate a new one and mark it as FAT_EOC
 int allocate_new_cluster(int last_cluster){
     for (int i = fs->data_start; i < fs->total_cluster; i++){
         if (fat[i] == 0){
@@ -327,6 +639,15 @@ int allocate_new_cluster(int last_cluster){
         }
     }
     return -1; // No space available
+}
+
+// Starting from a certain cluster, free all the clusters in the chain
+void free_cluster_chain(int cluster){
+    while(cluster != FAT_EOC){
+        int next = fat[cluster];
+        fat[cluster] = 0;
+        cluster = next;
+    }
 }
 
 int insert_entry_in_directory(FSEntry entry){
@@ -341,19 +662,42 @@ int insert_entry_in_directory(FSEntry entry){
         if (*entry_count_ptr < MAX_ENTRIES){
             entries[*entry_count_ptr] = entry;
             (*entry_count_ptr)++;
-            return 1;
+            return 0;
         }
 
         // If I can't fit any more FSEntry in this cluster, and it's the last cluster available, we allocate a new one
         if (fat[cluster] == FAT_EOC){
             int new_cluster = allocate_new_cluster(cluster);
             if (new_cluster == -1)
-                return 0;
+                return -1;
             cluster = new_cluster;
         }
         // If it is not the last one we make sure to reach the end of the cluster chain
         else cluster = fat[cluster];
     }
 
-    return 0;
+    return 0;       // technically never used cause we're stuck in a while(1) cycle
+}
+
+int remove_entry_from_directory(const char* name){
+    int cluster = current_cluster;
+
+    while(1){
+        void* cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
+        FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
+        int* entry_count_ptr = (int*)cluster_ptr;
+
+        // If we find the entry, we shift all the following entries backwards one position
+        for(int i = 0; i < *entry_count_ptr; i++){
+            if(strcmp(entries[i].name, name) == 0){
+                for(int j = i; j < *entry_count_ptr; j++)
+                    entries[j] = entries[j+1];
+            }
+            (*entry_count_ptr)--;
+            return 0;
+        }
+        if(fat[cluster] == FAT_EOC) break;
+        cluster = fat[cluster];
+    }
+    return -1;       // Not found
 }

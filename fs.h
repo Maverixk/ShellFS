@@ -28,8 +28,13 @@ typedef struct FileSystem{
 void format(const char* fs_filename, int size);
 void open_fs(const char* fs_filename);
 void close_fs();
-void _mkdir(const char* name);
+void _mkdir(const char* path);
+void _rm(const char* path);
 int _cd(const char* path);
+void _ls(const char* path);
+void _touch(const char* path);
 int insert_entry_in_directory(FSEntry entry);
+int remove_entry_from_directory(const char* name);
 int allocate_new_cluster(int last_cluster);
+void free_cluster_chain(int cluster);
 

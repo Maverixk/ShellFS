@@ -19,7 +19,7 @@ int main(){
 
         if(d == 1){
             printf("Lancio \"format file_system.xyz 2048\"\n");
-            format("file_system.xyz", 2048);
+            format("file_system.xyz", 5120);
         }
         else if(d == 2){
             printf("Lancio \"open file_system.xyz\"\n");
@@ -40,5 +40,9 @@ int main(){
         }
 
     }while(d != 23);
-   
+
+    _touch("marius.txt");
+    _touch("valerius.txt");
+    _touch("lorenzo.txt");
+    _ls(".");
 }
