@@ -31,9 +31,11 @@ void _cd(const char* name);
 void _ls(const char* name);
 void _touch(const char* name);
 void _cat(const char* name);
+void _append(const char* name, const char* text);
 int insert_entry_in_directory(FSEntry entry);
 int remove_entry_from_directory(const char* name);
 int allocate_new_cluster(int last_cluster);
 void free_cluster_chain(int cluster);
 void read_file(int start_cluster, int size);
+void write_file(int start_cluster, int size, const char* text);
 

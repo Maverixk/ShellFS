@@ -395,25 +395,57 @@ void _cat(const char* name){
     }
 
     int cluster = current_cluster;
-    void* cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
-    FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
-    int entry_count = *(int*)cluster_ptr;
 
-    int found = 0;
-    for(int i = 0; i < entry_count; i++){
-        if(strcmp(entries[i].name, name) == 0){
-            found = 1;
-            if(!entries[i].size){
-                printf("cat: empty file\n");
+    while(cluster != FAT_EOC){
+        void* cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
+        FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
+        int entry_count = *(int*)cluster_ptr;
+
+        for(int i = 0; i < entry_count; i++){
+            if(strcmp(entries[i].name, name) == 0){
+                if(entries[i].is_dir) printf("cat: '%s' is a directory\n", name);
+                else if(!entries[i].size) printf("cat: empty file\n");
+                else read_file(entries[i].start_cluster, entries[i].size);
                 return;
             }
-            if(!entries[i].is_dir) read_file(entries[i].start_cluster, entries[i].size);
-            else printf("cat: '%s' not a file\n", name);
-            break;
         }
+        cluster = fat[cluster];
     }
 
-    if(!found) printf("cat: '%s' not found\n", name);
+    printf("cat: '%s' not found\n", name);
+}
+
+void _append(const char* name, const char* text){
+     // We want the filename to stay within FILENAME_LEN bytes
+    if(strlen(name) >= FILENAME_LEN){
+        printf("append: name is too long\n");
+        return;
+    }
+
+    // We want to limit the "appendable text per instruction" to the size of a single cluster (512B)
+    char text_copy[CLUSTER_SIZE];
+    strncpy(text_copy, text, sizeof(text_copy));
+    text_copy[sizeof(text_copy) - 1] = '\0';
+
+    int cluster = current_cluster;
+    while(cluster != FAT_EOC){
+        void* cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
+        FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
+        int entry_count = *(int*)cluster_ptr;
+
+        for(int i = 0; i < entry_count; i++){
+            if(strcmp(entries[i].name, name) == 0){
+                if(!entries[i].is_dir){
+                    write_file(entries[i].start_cluster, entries[i].size, text_copy);
+                    entries[i].size += strlen(text) + 1;        // Includes '\0'
+                }
+                else printf("append: '%s' is not a file\n", name);
+                return;
+            }
+        }
+        cluster = fat[cluster];
+    }
+    printf("append: '%s' not found\n", name);
 }
 
 // Starting from a certain cluster, allocate a new one and mark it as FAT_EOC
@@ -512,4 +544,42 @@ void read_file(int start_cluster, int size){
 
     if(remaining == 0) printf("\n");
     else printf("cat: couldn't read entire file\n");
+}
+
+void write_file(int start_cluster, int size, const char* text){
+    // Check that cluster is within data bound
+    if(start_cluster < fs->data_start || start_cluster >=fs->total_cluster){
+        printf("append: invalid cluster\n");
+        return;
+    }
+
+    // First we gotta see which cluster is the first one in the chain with some space available
+    int cluster = start_cluster;
+    int jumps = size/CLUSTER_SIZE;
+    for(int i = 0; i < jumps; i++) cluster = fat[cluster];
+
+    int offset = size % CLUSTER_SIZE;
+    int remaining = strlen(text) + 1;   // Includes '\0'
+
+    while(remaining > 0){
+        // We want to see if we can copy all the remaining text or just enough to fill a cluster
+        int space_available = CLUSTER_SIZE - offset;
+        char* dest_ptr = (char*)(data + CLUSTER_SIZE * (cluster - fs->data_start) + offset);
+        int chunk = remaining >= space_available ? space_available : remaining;
+
+        memcpy(dest_ptr, text, chunk);
+        remaining -= chunk;
+        text += chunk;
+        offset = 0;
+        
+        // If we are not done yet, we allocate a new cluster and we keep going
+        if(remaining > 0){
+            int new_cluster = allocate_new_cluster(cluster);
+            if (new_cluster == -1){
+                printf("append: no more space available, text partially appended\n");
+                return;
+            }
+            cluster = new_cluster;
+        }
+    }
 }

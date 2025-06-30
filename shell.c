@@ -45,5 +45,9 @@ int main(){
     _touch("valerius.txt");
     _touch("lorenzo.txt");
     _ls(".");
+    _append("lorenzo.txt", "ciao marius!");
     _cat("marius.txt");
+    _cat("lorenzo.txt");
+    _rm("lorenzo.txt");
+    _cat("lorenzo.txt");
 }
