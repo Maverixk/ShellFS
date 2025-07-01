@@ -21,6 +21,14 @@ int current_entry_count;     // number of entries in current directory
 
 // Creates file system named <fs_filename> of <size> bytes
 void format(const char *fs_filename, int size){
+    // We want to check if <fs_filename> already exists
+    int test_fd = open(fs_filename, O_RDONLY);
+    if (test_fd != -1) {
+        close(test_fd);
+        printf("format: file system '%s' already exists\n", fs_filename);
+        return;
+    }
+
     int cluster_count = size / CLUSTER_SIZE;
     int fat_bytes = cluster_count * sizeof(int);
     int fat_clusters = (fat_bytes + CLUSTER_SIZE - 1) / CLUSTER_SIZE; // how many clusters do I need to store all FAT bytes?
@@ -50,20 +58,22 @@ void format(const char *fs_filename, int size){
     fs->root_cluster = data_start; // root cluster is the first of data clusters
     fat[fs->root_cluster] = FAT_EOC;
 
-    // Initialize root dir with 0
-    *(int *)(data + CLUSTER_SIZE * fs->root_cluster) = 0;
+    // Create . dir in root with entry_count = 1
+    FSEntry* root_entries = (FSEntry*)(data + CLUSTER_SIZE * (fs->root_cluster - fs->data_start) + sizeof(int));
+    strcpy(root_entries[0].name, ".");
+    root_entries[0].is_dir = 1;
+    root_entries[0].start_cluster = fs->root_cluster;
+    *(int*)(data + CLUSTER_SIZE * (fs->root_cluster - fs->data_start)) = 1;
 
     assert(!munmap(fs_data, size) && "munmap failed");
     assert(!close(fs_fd) && "file close failed");
 }
 
 // Opens <fs_filename>
-void open_fs(const char *fs_filename){
+int open_fs(const char *fs_filename){
     fs_fd = open(fs_filename, O_RDWR, 0600);
-    if(fs_fd < 0){
-        printf("open: file system does not exist\n");
-        return;
-    }
+    if(fs_fd < 0)
+        return -1;
 
     struct stat st;
     assert(fstat(fs_fd, &st) == 0 && "fstat failed");
@@ -83,8 +93,9 @@ void open_fs(const char *fs_filename){
     current_cluster = fs->root_cluster;
     assert(current_cluster >= fs->data_start && current_cluster < fs->total_cluster && "current cluster out of bounds");
     current_dir = (FSEntry *)(data + CLUSTER_SIZE * (current_cluster - fs->data_start) + sizeof(int));
-    current_entry_count = *(int *)(data + CLUSTER_SIZE * (current_cluster - fs->data_start));
+    current_entry_count = *(int*)(data + CLUSTER_SIZE * (current_cluster - fs->data_start));
 
+    return 0;
 }
 
 // Closes currently open FS
@@ -214,14 +225,18 @@ void _cd(const char *name){
         int found = 0;
         int temp_cluster = cluster;
 
-        // Scan through all dir clusters until I found the subdir I'm looking for
+        // Scan through all dir clusters until I find the subdir I'm looking for
         while (temp_cluster != FAT_EOC){
             void *cluster_ptr = data + CLUSTER_SIZE * (temp_cluster - fs->data_start);
             int entry_count = *(int *)cluster_ptr;
             FSEntry *entries = (FSEntry *)(cluster_ptr + sizeof(int));
 
             for (int i = 0; i < entry_count; i++){
-                if (entries[i].is_dir && strcmp(entries[i].name, name) == 0){
+                if(strcmp(entries[i].name, name) == 0 && !entries[i].is_dir){
+                    printf("cd: '%s' not a directory\n", name);
+                    return;
+                }
+                else if(strcmp(entries[i].name, name) == 0 && entries[i].is_dir){
                     cluster = entries[i].start_cluster;
                     found = 1;
                     break;
@@ -247,7 +262,13 @@ void _cd(const char *name){
 void _rm(const char* name){
     // Check that dir name isn't longer than FILENAME_LEN bytes
     if (strlen(name) >= FILENAME_LEN){
-        printf("mkdir: name too long\n");
+        printf("rm: name too long\n");
+        return;
+    }
+
+    // Can't remove current or parent dir, I'll cry
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+        printf("rm: invalid directory name\n");
         return;
     }
 
@@ -266,10 +287,10 @@ void _rm(const char* name){
                 // If the entry is a directory and it's not empty we can't remove it (same as we can't create directories recursively)
                 if(entries[i].is_dir){
                     int dir_cluster = entries[i].start_cluster;
-                    int entry_count = *(int*)(data + CLUSTER_SIZE * (dir_cluster - fs->data_start));
+                    int dir_entry_count = *(int*)(data + CLUSTER_SIZE * (dir_cluster - fs->data_start));
 
                     // There are other entries apart from . and ..
-                    if(entry_count > 2){
+                    if(dir_entry_count > 2){
                         printf("rm: directory not empty\n");
                         return;
                     }
@@ -310,7 +331,6 @@ void _ls(const char* name){
                 FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
                 int entry_count = *(int*)cluster_ptr;
 
-                printf("ls: ");
                 for(int i = 0; i < entry_count; i++){
                     printf("%s", entries[i].name);
                     if(i != entry_count - 1) printf(" | ");
@@ -422,10 +442,17 @@ void _append(const char* name, const char* text){
         return;
     }
 
-    // We want to limit the "appendable text per instruction" to the size of a single cluster (512B)
+    // We want to limit the "appendable text per instruction" to the size of (almost) a single cluster (510B)
     char text_copy[CLUSTER_SIZE];
-    strncpy(text_copy, text, sizeof(text_copy));
-    text_copy[sizeof(text_copy) - 1] = '\0';
+
+    if (strlen(text) + 2 > CLUSTER_SIZE) {          // +1 per '\n', +1 per '\0'
+        printf("append: text is too long\n");
+        return;
+    }
+
+    strncpy(text_copy, text, CLUSTER_SIZE - 2);
+    text_copy[strlen(text_copy)] = '\n';
+    text_copy[strlen(text_copy) + 1] = '\0';
 
     int cluster = current_cluster;
     while(cluster != FAT_EOC){
@@ -437,9 +464,9 @@ void _append(const char* name, const char* text){
             if(strcmp(entries[i].name, name) == 0){
                 if(!entries[i].is_dir){
                     write_file(entries[i].start_cluster, entries[i].size, text_copy);
-                    entries[i].size += strlen(text) + 1;        // Includes '\0'
+                    entries[i].size += strlen(text_copy);
                 }
-                else printf("append: '%s' is not a file\n", name);
+                else printf("append: '%s' is a directory\n", name);
                 return;
             }
         }
@@ -466,6 +493,7 @@ void free_cluster_chain(int cluster){
     while(cluster != FAT_EOC){
         int next = fat[cluster];
         fat[cluster] = 0;
+        memset(data + CLUSTER_SIZE * (cluster - fs->data_start), 0, CLUSTER_SIZE);
         cluster = next;
     }
 }
@@ -510,11 +538,12 @@ int remove_entry_from_directory(const char* name){
         // If we find the entry, we shift all the following entries backwards one position
         for(int i = 0; i < *entry_count_ptr; i++){
             if(strcmp(entries[i].name, name) == 0){
-                for(int j = i; j < *entry_count_ptr; j++)
+                for(int j = i; j < (*entry_count_ptr) - 1; j++)
                     entries[j] = entries[j+1];
+                (*entry_count_ptr)--;
+                memset(&entries[*entry_count_ptr], 0, sizeof(FSEntry));
+                return 0;
             }
-            (*entry_count_ptr)--;
-            return 0;
         }
         if(fat[cluster] == FAT_EOC) break;
         cluster = fat[cluster];
@@ -582,4 +611,82 @@ void write_file(int start_cluster, int size, const char* text){
             cluster = new_cluster;
         }
     }
+}
+
+void print_path(){
+    // If I'm in root, print root!
+    if (current_cluster == fs->root_cluster) {
+        printf("~$ ");
+        return;
+    }
+
+    // Maximum depth of 100 levels
+    char path[MAX_DEPTH][FILENAME_LEN];
+    int path_size = 0;
+
+    int cluster = current_cluster;
+
+    // I want to scan all the path backwards until I reach the root directory
+    while(cluster != fs->root_cluster){
+
+        int parent_cluster = -1;
+        int current = cluster;
+        int found = 0;
+
+        // I start from the current cluster and check if it has a parent directory
+        while(current != FAT_EOC && !found){
+            void* cluster_ptr = data + CLUSTER_SIZE * (current - fs->data_start);
+            FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
+            int entry_count = *(int*)cluster_ptr;
+
+            for(int i = 0; i < entry_count; i++){
+                if(entries[i].is_dir && strcmp(entries[i].name, "..") == 0){
+                    found = 1;
+                    parent_cluster = entries[i].start_cluster;
+                    break;
+                }
+            }
+            current = fat[current];
+        }
+
+        if(parent_cluster == -1){
+            printf("error: parent directory not found\n");
+            return;
+        }
+
+        current = parent_cluster;
+        found = 0;
+
+        // I extract the name of the current directory from the entries array of its parent
+        while(current != FAT_EOC && !found){
+            void* parent_ptr = data + CLUSTER_SIZE * (current - fs->data_start);
+            FSEntry* parent_entries = (FSEntry*)(parent_ptr + sizeof(int));
+            int parent_entry_count = *(int*)parent_ptr;
+
+            for(int i = 0; i < parent_entry_count; i++){
+                if(parent_entries[i].is_dir && parent_entries[i].start_cluster == cluster && path_size != 100){
+                    strncpy(path[path_size], parent_entries[i].name, FILENAME_LEN);
+                    path[path_size++][FILENAME_LEN-1] = '\0';
+                    found = 1;
+                    break;
+                }
+            }
+            current = fat[current];
+        }
+
+        if(!found){
+            printf("error: directory name not found in parent\n");
+            return;
+        }
+
+        cluster = parent_cluster;
+    }
+
+    // We print the path (after the filename, see shell behaviour)
+    printf("~/");
+    for (int i = path_size - 1; i >= 0; i--) {
+        printf("%s", path[i]);
+        if (i > 0) printf("/");
+    }
+    printf("$ ");
 }

@@ -5,6 +5,7 @@
 #define CLUSTER_SIZE 512
 #define FAT_EOC -1
 #define MAX_ENTRIES (CLUSTER_SIZE - sizeof(int)) / sizeof(FSEntry)
+#define MAX_DEPTH 100
 
 // Data structures
 typedef struct FSEntry{
@@ -23,7 +24,7 @@ typedef struct FileSystem{
 
 // FS functions
 void format(const char* fs_filename, int size);
-void open_fs(const char* fs_filename);
+int open_fs(const char* fs_filename);
 void close_fs();
 void _mkdir(const char* name);
 void _rm(const char* name);
@@ -38,4 +39,4 @@ int allocate_new_cluster(int last_cluster);
 void free_cluster_chain(int cluster);
 void read_file(int start_cluster, int size);
 void write_file(int start_cluster, int size, const char* text);
-
+void print_path();
