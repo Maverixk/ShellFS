@@ -9,10 +9,10 @@ quali `cat`, `ls`, `rm` ecc.
 
 # Funzionamento
 La shell, una volta runnata fornisce un'interfaccia di tre comandi per interagire 
-con i file system (format, open e close). Una volta aperto un file system con il 
-comando open, esso va a bloccare le 3 operazioni proprie dei file system per altri file.
+con i file system (`format`, `open` e `close`). Una volta aperto un file system con il 
+comando `open`, esso va a bloccare le operazioni `format` ed `open` per altri file.
 In questa modalità vengono sbloccati i comandi di shell (`mkdir`, `ls`, ecc..) per il file system
-appena aperto e sarà possibile ritornare allo stato originale digitando close. 
+appena aperto e sarà possibile ritornare allo stato originale solo con il comando `close`. 
 
 ## Comandi disponibili
 
@@ -33,3 +33,4 @@ appena aperto e sarà possibile ritornare allo stato originale digitando close.
 ### Comandi general purpose
 - `help`
 - `quit`
+- `clear`

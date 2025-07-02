@@ -35,6 +35,14 @@ void format(const char *fs_filename, int size){
     int fat_start = 1;                                                // entry 0 of FAT is usually reserved for Boot Sector
     int data_start = fat_start + fat_clusters;
 
+    // We want to make sure there is enough space for Boot Sector cluster, one FAT cluster and at least one data cluster (root) 
+    int min_clusters = fat_start + fat_clusters + 1;      
+    if (cluster_count < min_clusters) {
+        printf("format: size too small (%d B). Minimum is %d B for this cluster size (%d)\n",
+               size, min_clusters * CLUSTER_SIZE, CLUSTER_SIZE);
+        return;
+    }
+
     fs_fd = open(fs_filename, O_CREAT | O_RDWR, 0600);
     assert(fs_fd > 0 && "file open failed");
 
@@ -316,7 +324,7 @@ void _rm(const char* name){
 void _ls(const char* name){
     // Check that dir name isn't longer than FILENAME_LEN bytes
     if (strlen(name) >= FILENAME_LEN){
-        printf("mkdir: name too long\n");
+        printf("ls: name too long\n");
         return;
     }
 
@@ -324,7 +332,7 @@ void _ls(const char* name){
     int cluster = current_cluster;
 
     // We go through all the clusters of the current directory until we find the one we're looking for
-    while(!found && cluster != FAT_EOC){
+    while(cluster != FAT_EOC && !found){
         void* cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
         FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
         int entry_count = *(int*)cluster_ptr;
@@ -334,14 +342,18 @@ void _ls(const char* name){
                 found = 1;
                 if(entries[i].is_dir){
                     int dir_cluster = entries[i].start_cluster;
-                    void* dir_cluster_ptr = data + CLUSTER_SIZE * (dir_cluster - fs->data_start);
-                    FSEntry* dir_entries = (FSEntry*)(dir_cluster_ptr + sizeof(int));
-                    int dir_entry_count = *(int*)dir_cluster_ptr;
+                    while(dir_cluster != FAT_EOC){
+                        void* dir_cluster_ptr = data + CLUSTER_SIZE * (dir_cluster - fs->data_start);
+                        FSEntry* dir_entries = (FSEntry*)(dir_cluster_ptr + sizeof(int));
+                        int dir_entry_count = *(int*)dir_cluster_ptr;
 
-                    for(int i = 0; i < dir_entry_count; i++){
-                        printf("%s", dir_entries[i].name);
-                        if(i != dir_entry_count - 1) printf(" | ");
+                        for(int j = 0; j < dir_entry_count; j++){
+                            printf("%s", dir_entries[j].name);
+                            if(j != dir_entry_count - 1) printf(" | ");
+                        }
+                        if(fat[dir_cluster] != FAT_EOC) printf(" | ");
                         else printf("\n");
+                        dir_cluster = fat[dir_cluster];
                     }
                 }
                 else{

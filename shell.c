@@ -23,6 +23,7 @@ void print_help() {
     printf("\t- append <file> <text>\n");
     printf("\t- rm     <dir/file>\n");
     printf("\t- close\n");
+    printf("\t- clear\n");
     printf("\t- help\n");
     printf("\t- quit\n");
 }
@@ -69,6 +70,8 @@ int main(void) {
             break;
         } else if (strcmp(cmd, "help") == 0) {
             print_help();
+        }else if(strcmp(cmd, "clear") == 0) {
+            system("clear");
         }
 
         // Format
@@ -167,6 +170,7 @@ int main(void) {
                 if (check_arity("append", provided, 3) == -1) continue;
                 _append(file, text);
             }
+
             // If the command is unknown
             else printf("Command not recognised, type 'help' for command list.\n");
         }
