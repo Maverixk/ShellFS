@@ -21,7 +21,7 @@ void print_help() {
     printf("\t- cat    <file>\n");
     printf("\t- ls     <dir>\n");
     printf("\t- append <file> <text>\n");
-    printf("\t- rm     <dir>\n");
+    printf("\t- rm     <dir/file>\n");
     printf("\t- close\n");
     printf("\t- help\n");
     printf("\t- quit\n");

@@ -162,7 +162,7 @@ void _mkdir(const char *name){
     entry.start_cluster = new_cluster;
     entry.size = 0;
 
-    if (insert_entry_in_directory(entry)){
+    if (insert_entry_in_directory(entry) == -1){
         printf("mkdir: not enough space to insert entry\n");
         return;
     }
@@ -228,8 +228,8 @@ void _cd(const char *name){
         // Scan through all dir clusters until I find the subdir I'm looking for
         while (temp_cluster != FAT_EOC){
             void *cluster_ptr = data + CLUSTER_SIZE * (temp_cluster - fs->data_start);
-            int entry_count = *(int *)cluster_ptr;
-            FSEntry *entries = (FSEntry *)(cluster_ptr + sizeof(int));
+            int entry_count = *(int*)cluster_ptr;
+            FSEntry *entries = (FSEntry*)(cluster_ptr + sizeof(int));
 
             for (int i = 0; i < entry_count; i++){
                 if(strcmp(entries[i].name, name) == 0 && !entries[i].is_dir){
@@ -320,28 +320,37 @@ void _ls(const char* name){
         return;
     }
 
-    // We look for the directory in the current directory
     int found = 0;
-    for(int i = 0; i < current_entry_count; i++){
-        if(strcmp(name, current_dir[i].name) == 0){
-            found = 1;
-            if(current_dir[i].is_dir){
-                int cluster = current_dir[i].start_cluster;
-                void* cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
-                FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
-                int entry_count = *(int*)cluster_ptr;
+    int cluster = current_cluster;
 
-                for(int i = 0; i < entry_count; i++){
-                    printf("%s", entries[i].name);
-                    if(i != entry_count - 1) printf(" | ");
-                    else printf("\n");
+    // We go through all the clusters of the current directory until we find the one we're looking for
+    while(!found && cluster != FAT_EOC){
+        void* cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
+        FSEntry* entries = (FSEntry*)(cluster_ptr + sizeof(int));
+        int entry_count = *(int*)cluster_ptr;
+        
+        for(int i = 0; i < entry_count; i++){
+            if(strcmp(name, entries[i].name) == 0){
+                found = 1;
+                if(entries[i].is_dir){
+                    int dir_cluster = entries[i].start_cluster;
+                    void* dir_cluster_ptr = data + CLUSTER_SIZE * (dir_cluster - fs->data_start);
+                    FSEntry* dir_entries = (FSEntry*)(dir_cluster_ptr + sizeof(int));
+                    int dir_entry_count = *(int*)dir_cluster_ptr;
+
+                    for(int i = 0; i < dir_entry_count; i++){
+                        printf("%s", dir_entries[i].name);
+                        if(i != dir_entry_count - 1) printf(" | ");
+                        else printf("\n");
+                    }
+                }
+                else{
+                    printf("ls: '%s' not a directory\n", name);
+                    return;
                 }
             }
-            else{
-                printf("ls: '%s' not a directory\n", name);
-                return;
-            }
         }
+        cluster = fat[cluster];        
     }
 
     if(!found){
@@ -503,8 +512,8 @@ int insert_entry_in_directory(FSEntry entry){
 
     while (1){
         void *cluster_ptr = data + CLUSTER_SIZE * (cluster - fs->data_start);
-        int *entry_count_ptr = (int *)cluster_ptr;
-        FSEntry *entries = (FSEntry *)(cluster_ptr + sizeof(int));
+        int *entry_count_ptr = (int*)cluster_ptr;
+        FSEntry *entries = (FSEntry*)(cluster_ptr + sizeof(int));
 
         // How many FSEntries can fit in a cluster? If I haven't exceed that number I can still use this cluster
         if (*entry_count_ptr < MAX_ENTRIES){
