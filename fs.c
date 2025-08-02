@@ -148,15 +148,7 @@ void _mkdir(const char *name){
     }
 
     // Find a free cluster on FAT
-    int new_cluster = -1;
-    for (int i = fs->data_start; i < fs->total_cluster; i++){
-        if (fat[i] == 0){
-            fat[i] = FAT_EOC;
-            new_cluster = i;
-            break;
-        }
-    }
-
+    int new_cluster = allocate_new_cluster(-1);
     if (new_cluster == -1){
         printf("mkdir: no empty space\n");
         return;
@@ -400,15 +392,7 @@ void _touch(const char* name){
     }
 
     // Find a free cluster on FAT
-    int new_cluster = -1;
-    for(int i = fs->data_start; i < fs->total_cluster; i++){
-        if(fat[i] == 0){
-            fat[i] = FAT_EOC;
-            new_cluster = i;
-            break;
-        }
-    }
-
+    int new_cluster = allocate_new_cluster(-1);
     if(new_cluster == -1){
         printf("touch: no empty space\n");
         return;
@@ -502,7 +486,7 @@ int allocate_new_cluster(int last_cluster){
         if (fat[i] == 0){
             fat[i] = FAT_EOC;
             memset(data + CLUSTER_SIZE * (i - fs->data_start), 0, CLUSTER_SIZE);
-            fat[last_cluster] = i;
+            if(last_cluster >= 0) fat[last_cluster] = i;
             return i;
         }
     }
