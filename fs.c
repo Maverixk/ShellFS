@@ -184,7 +184,7 @@ void _mkdir(const char *name){
 void _cd(const char *name){
     // Check that dir name isn't longer than FILENAME_LEN bytes
     if (strlen(name) >= FILENAME_LEN){
-        printf("mkdir: name too long\n");
+        printf("cd: name too long\n");
         return;
     }
 
@@ -415,7 +415,7 @@ void _touch(const char* name){
 void _cat(const char* name){
     // We want the filename to stay within FILENAME_LEN bytes
     if(strlen(name) >= FILENAME_LEN){
-        printf("touch: name is too long\n");
+        printf("cat: name is too long\n");
         return;
     }
 
